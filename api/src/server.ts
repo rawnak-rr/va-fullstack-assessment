@@ -3,17 +3,91 @@ import express from 'express';
 import cors from 'cors';
 import { startEmulatorWsClient } from './emu-ws';
 
+interface TelemetryReading {
+  sensorId: number;
+  value: number;
+  timestamp: number;
+}
+
 const app = express();
 app.use(cors({ origin: true, credentials: false }));
 app.use(express.json());
 
 // Default to local emulator when EMULATOR_URL is not provided.
 const EMULATOR_URL = process.env.EMULATOR_URL || 'http://localhost:3001';
+const latestBySensor = new Map<number, TelemetryReading>();
+
+const telemetryStats = {
+  accepted: 0,
+  dropped: 0,
+  coerced: 0
+};
+
+function coerceNumber(input: unknown): { ok: true; value: number; coerced: boolean } | { ok: false } {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    return { ok: true, value: input, coerced: false };
+  }
+
+  if (typeof input === 'string') {
+    const parsed = Number(input);
+    if (Number.isFinite(parsed)) {
+      return { ok: true, value: parsed, coerced: true };
+    }
+  }
+
+  return { ok: false };
+}
+
+function normalizeTelemetryPayload(payload: unknown): TelemetryReading | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+
+  const data = payload as Record<string, unknown>;
+  const keys = Object.keys(data);
+  const allowedKeys = new Set(['sensorId', 'value', 'timestamp']);
+  if (keys.length !== 3 || keys.some((key) => !allowedKeys.has(key))) {
+    return null;
+  }
+
+  const sensorIdResult = coerceNumber(data.sensorId);
+  const valueResult = coerceNumber(data.value);
+  const timestampResult = coerceNumber(data.timestamp);
+
+  if (!sensorIdResult.ok || !valueResult.ok || !timestampResult.ok) {
+    return null;
+  }
+
+  const sensorId = sensorIdResult.value;
+  const value = valueResult.value;
+  const timestamp = timestampResult.value;
+
+  if (!Number.isSafeInteger(sensorId) || sensorId <= 0) {
+    return null;
+  }
+
+  if (timestamp <= 0) {
+    return null;
+  }
+
+  if (sensorIdResult.coerced || valueResult.coerced || timestampResult.coerced) {
+    telemetryStats.coerced += 1;
+  }
+
+  return { sensorId, value, timestamp };
+}
 
 startEmulatorWsClient({
   emulatorHttpUrl: EMULATOR_URL,
   onTelemetry: (payload) => {
-    console.log('[api] raw telemetry payload', payload);
+    const reading = normalizeTelemetryPayload(payload);
+    if (!reading) {
+      telemetryStats.dropped += 1;
+      return;
+    }
+
+    latestBySensor.set(reading.sensorId, reading);
+    telemetryStats.accepted += 1;
   }
 });
 
@@ -27,6 +101,17 @@ app.get('/health', async (_req, res) => {
     // connection failed
   }
   res.status(503).json({ status: 'unhealthy', emulator: false });
+});
+
+app.get('/telemetry/latest', (_req, res) => {
+  const readings = Array.from(latestBySensor.values()).sort(
+    (a, b) => a.sensorId - b.sensorId
+  );
+  res.json(readings);
+});
+
+app.get('/telemetry/stats', (_req, res) => {
+  res.json(telemetryStats);
 });
 
 // ---------------------------------------------------------------------------
