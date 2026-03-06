@@ -1,6 +1,7 @@
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
+import { startEmulatorWsClient } from './emu-ws';
 
 const app = express();
 app.use(cors({ origin: true, credentials: false }));
@@ -8,6 +9,13 @@ app.use(express.json());
 
 // Default to local emulator when EMULATOR_URL is not provided.
 const EMULATOR_URL = process.env.EMULATOR_URL || 'http://localhost:3001';
+
+startEmulatorWsClient({
+  emulatorHttpUrl: EMULATOR_URL,
+  onTelemetry: (payload) => {
+    console.log('[api] raw telemetry payload', payload);
+  }
+});
 
 app.get('/health', async (_req, res) => {
   try {
