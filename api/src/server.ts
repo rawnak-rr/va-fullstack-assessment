@@ -9,19 +9,111 @@ interface TelemetryReading {
   timestamp: number;
 }
 
+interface SensorMetadata {
+  sensorId: number;
+  sensorName: string;
+  unit: string;
+}
+
 const app = express();
 app.use(cors({ origin: true, credentials: false }));
 app.use(express.json());
 
 // Default to local emulator when EMULATOR_URL is not provided.
 const EMULATOR_URL = process.env.EMULATOR_URL || 'http://localhost:3001';
+const EMULATOR_SENSORS_URL = `${EMULATOR_URL.replace(/\/$/, '')}/sensors`;
 const latestBySensor = new Map<number, TelemetryReading>();
+const SENSOR_CACHE_TTL_MS = 30_000;
+let sensorMetadataCache: SensorMetadata[] = [];
+let sensorMetadataCachedAt = 0;
 
 const telemetryStats = {
   accepted: 0,
   dropped: 0,
   coerced: 0
 };
+
+function normalizeSensorMetadata(payload: unknown): SensorMetadata[] | null {
+  if (!Array.isArray(payload)) {
+    return null;
+  }
+
+  const normalized: SensorMetadata[] = [];
+
+  for (const item of payload) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return null;
+    }
+    const data = item as Record<string, unknown>;
+    const keys = Object.keys(data);
+    const allowedKeys = new Set(['sensorId', 'sensorName', 'unit']);
+    if (keys.length !== 3 || keys.some((key) => !allowedKeys.has(key))) {
+      return null;
+    }
+
+    if (
+      typeof data.sensorId !== 'number' ||
+      !Number.isSafeInteger(data.sensorId) ||
+      data.sensorId <= 0 ||
+      typeof data.sensorName !== 'string' ||
+      data.sensorName.length === 0 ||
+      typeof data.unit !== 'string' ||
+      data.unit.length === 0
+    ) {
+      return null;
+    }
+
+    normalized.push({
+      sensorId: data.sensorId,
+      sensorName: data.sensorName,
+      unit: data.unit
+    });
+  }
+
+  return normalized;
+}
+
+async function fetchSensorMetadataFromEmulator(timeoutMs = 3000): Promise<SensorMetadata[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(EMULATOR_SENSORS_URL, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Emulator sensors request failed: ${response.status}`);
+    }
+
+    const payload = (await response.json()) as unknown;
+    const sensors = normalizeSensorMetadata(payload);
+    if (!sensors) {
+      throw new Error('Emulator sensors response is invalid');
+    }
+
+    return sensors;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getSensorMetadata(): Promise<SensorMetadata[]> {
+  const now = Date.now();
+  if (sensorMetadataCache.length > 0 && now - sensorMetadataCachedAt < SENSOR_CACHE_TTL_MS) {
+    return sensorMetadataCache;
+  }
+
+  try {
+    const sensors = await fetchSensorMetadataFromEmulator();
+    sensorMetadataCache = sensors;
+    sensorMetadataCachedAt = now;
+    return sensors;
+  } catch (error) {
+    if (sensorMetadataCache.length > 0) {
+      console.warn('[api] serving stale /sensors cache because emulator request failed');
+      return sensorMetadataCache;
+    }
+    throw error;
+  }
+}
 
 function coerceNumber(input: unknown): { ok: true; value: number; coerced: boolean } | { ok: false } {
   if (typeof input === 'number' && Number.isFinite(input)) {
@@ -101,6 +193,16 @@ app.get('/health', async (_req, res) => {
     // connection failed
   }
   res.status(503).json({ status: 'unhealthy', emulator: false });
+});
+
+app.get('/sensors', async (_req, res) => {
+  try {
+    const sensors = await getSensorMetadata();
+    res.json(sensors);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Failed to fetch sensor metadata';
+    res.status(502).json({ reason });
+  }
 });
 
 app.get('/telemetry/latest', (_req, res) => {
