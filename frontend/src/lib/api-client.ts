@@ -46,9 +46,36 @@ export async function fetchHealth(timeoutMs = 3000): Promise<HealthResponse> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Add your own functions here to call the metadata and data endpoints you
-// designed in the API section (e.g. fetchSensors(), fetchLatestTelemetry(),
-// or whatever paths and response shapes you defined). Use the types above
-// or define new ones to match your API.
-// ---------------------------------------------------------------------------
+async function fetchJson<T>(path: string, timeoutMs = 3000): Promise<T> {
+  const url = `${API_BASE_URL}${path}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { mode: 'cors', signal: controller.signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const reason =
+        data && typeof data === 'object' && 'reason' in data
+          ? String((data as { reason: unknown }).reason)
+          : `${res.status} ${res.statusText}`;
+      throw new Error(`${path}: ${reason}`);
+    }
+    return data as T;
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`${path} timed out`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function fetchSensors(timeoutMs = 3000): Promise<SensorMetadata[]> {
+  return fetchJson<SensorMetadata[]>('/sensors', timeoutMs);
+}
+
+export function fetchLatestTelemetry(timeoutMs = 3000): Promise<TelemetryReading[]> {
+  return fetchJson<TelemetryReading[]>('/telemetry/latest', timeoutMs);
+}

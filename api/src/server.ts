@@ -15,6 +15,11 @@ interface SensorMetadata {
   unit: string;
 }
 
+interface RangeRule {
+  min: number;
+  max: number;
+}
+
 const app = express();
 app.use(cors({ origin: true, credentials: false }));
 app.use(express.json());
@@ -22,16 +27,83 @@ app.use(express.json());
 // Default to local emulator when EMULATOR_URL is not provided.
 const EMULATOR_URL = process.env.EMULATOR_URL || 'http://localhost:3001';
 const EMULATOR_SENSORS_URL = `${EMULATOR_URL.replace(/\/$/, '')}/sensors`;
-const latestBySensor = new Map<number, TelemetryReading>();
 const SENSOR_CACHE_TTL_MS = 30_000;
+const OUT_OF_RANGE_WINDOW_MS = 5_000;
+
+const SENSOR_RANGES_BY_NAME: Record<string, RangeRule> = {
+  BATTERY_TEMPERATURE: { min: 20, max: 80 },
+  MOTOR_TEMPERATURE: { min: 30, max: 120 },
+  TYRE_PRESSURE_FL: { min: 150, max: 250 },
+  TYRE_PRESSURE_FR: { min: 150, max: 250 },
+  TYRE_PRESSURE_RL: { min: 150, max: 250 },
+  TYRE_PRESSURE_RR: { min: 150, max: 250 },
+  PACK_CURRENT: { min: -300, max: 300 },
+  PACK_VOLTAGE: { min: 350, max: 500 },
+  PACK_SOC: { min: 0, max: 100 },
+  VEHICLE_SPEED: { min: 0, max: 250 },
+  STEERING_ANGLE: { min: -180, max: 180 },
+  BRAKE_PRESSURE_FRONT: { min: 0, max: 120 }
+};
+
+const latestBySensor = new Map<number, TelemetryReading>();
 let sensorMetadataCache: SensorMetadata[] = [];
 let sensorMetadataCachedAt = 0;
+const sensorNameById = new Map<number, string>();
+const outOfRangeEventsBySensor = new Map<number, number[]>();
+const outOfRangeAlertActive = new Set<number>();
 
 const telemetryStats = {
   accepted: 0,
   dropped: 0,
   coerced: 0
 };
+
+function syncSensorNameLookup(sensors: SensorMetadata[]): void {
+  sensorNameById.clear();
+  for (const sensor of sensors) {
+    sensorNameById.set(sensor.sensorId, sensor.sensorName);
+  }
+}
+
+function isOutOfRange(sensorName: string, value: number): boolean {
+  const range = SENSOR_RANGES_BY_NAME[sensorName];
+  if (!range) {
+    return false;
+  }
+  return value < range.min || value > range.max;
+}
+
+function processOutOfRange(reading: TelemetryReading): void {
+  const sensorName = sensorNameById.get(reading.sensorId);
+  if (!sensorName) {
+    return;
+  }
+
+  const now = Date.now();
+  const cutoff = now - OUT_OF_RANGE_WINDOW_MS;
+  const events = outOfRangeEventsBySensor.get(reading.sensorId) ?? [];
+
+  while (events.length > 0 && events[0] < cutoff) {
+    events.shift();
+  }
+
+  if (isOutOfRange(sensorName, reading.value)) {
+    events.push(now);
+  }
+
+  outOfRangeEventsBySensor.set(reading.sensorId, events);
+
+  if (events.length > 3 && !outOfRangeAlertActive.has(reading.sensorId)) {
+    console.error(
+      `[${new Date().toISOString()}] out-of-range burst detected sensorId=${reading.sensorId} sensorName=${sensorName} count=${events.length} windowMs=${OUT_OF_RANGE_WINDOW_MS}`
+    );
+    outOfRangeAlertActive.add(reading.sensorId);
+  }
+
+  if (events.length <= 3) {
+    outOfRangeAlertActive.delete(reading.sensorId);
+  }
+}
 
 function normalizeSensorMetadata(payload: unknown): SensorMetadata[] | null {
   if (!Array.isArray(payload)) {
@@ -105,6 +177,7 @@ async function getSensorMetadata(): Promise<SensorMetadata[]> {
     const sensors = await fetchSensorMetadataFromEmulator();
     sensorMetadataCache = sensors;
     sensorMetadataCachedAt = now;
+    syncSensorNameLookup(sensors);
     return sensors;
   } catch (error) {
     if (sensorMetadataCache.length > 0) {
@@ -179,6 +252,7 @@ startEmulatorWsClient({
     }
 
     latestBySensor.set(reading.sensorId, reading);
+    processOutOfRange(reading);
     telemetryStats.accepted += 1;
   }
 });
@@ -237,4 +311,18 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(Number(PORT), HOST, () => {
   console.log(`API server listening on http://${HOST}:${PORT}`);
+  void getSensorMetadata()
+    .then((sensors) => {
+      console.log(`[api] sensor metadata loaded: ${sensors.length} sensors`);
+    })
+    .catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.warn(`[api] initial sensor metadata load failed: ${reason}`);
+    });
+
+  setInterval(() => {
+    void getSensorMetadata().catch(() => {
+      // Stale cache fallback is handled in getSensorMetadata.
+    });
+  }, SENSOR_CACHE_TTL_MS).unref();
 });
