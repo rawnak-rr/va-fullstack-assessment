@@ -78,7 +78,7 @@ Use this section to briefly explain your frontend design decisions. Bullet point
 ### 1. Figma mockup
 
 - Link to your low-fidelity Figma mockup and what it shows:
-https://www.figma.com/design/yRtoV94B7bdCEoTAgt6V6l/redback?node-id=0-1&t=fPeMdLJ7MgrwmNub-1
+https://www.figma.com/make/ukuqH07yL0BgQoXXFhDjGW/redbackfigma?t=CXJvToaSHPfznaOX-1
 
 The Figma mockup is a basic wireframe of what I planned to achieve with my UI. Since I had a clear idea of what I wanted to display and how I wanted that, I planned it out quickly over Figma with just texts and containers.
 If I was developing exact UI for someone else, I would put more time into exact details.
