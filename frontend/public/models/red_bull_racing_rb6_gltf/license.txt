@@ -1,0 +1,11 @@
+Model Information:
+* title:	Red Bull Racing RB6
+* source:	https://sketchfab.com/3d-models/red-bull-racing-rb6-7ba1ee5ca7544e46b6a652b4186f11b6
+* author:	Casacade Models (https://sketchfab.com/CasacadeOperations)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Red Bull Racing RB6" (https://sketchfab.com/3d-models/red-bull-racing-rb6-7ba1ee5ca7544e46b6a652b4186f11b6) by Casacade Models (https://sketchfab.com/CasacadeOperations) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
