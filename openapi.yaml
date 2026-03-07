@@ -1,18 +1,178 @@
 openapi: 3.0.3
 info:
-  title: Vehicle Analytics API Assessment
+  title: Vehicle Analytics API
   version: 1.0.0
   description: >
-    Only the health endpoint is predefined. You must design and implement the
-    metadata and data API, then document your full API in this spec (or a separate
-    file) and describe how to view it in justification.md.
+    API that consumes telemetry from the emulator WebSocket stream, sanitizes
+    invalid payloads, stores latest valid readings per sensor, and exposes
+    metadata and latest telemetry for dashboard clients.
+tags:
+  - name: System
+  - name: Sensors
+  - name: Telemetry
 paths:
   /health:
     get:
-      summary: Health check (implemented in skeleton)
+      tags: [System]
+      summary: Health check
+      description: Returns API health and whether the emulator is reachable.
       responses:
         '200':
-          description: OK
+          description: API healthy and emulator reachable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                emulator: true
+        '503':
+          description: API reachable but emulator currently unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: unhealthy
+                emulator: false
+  /sensors:
+    get:
+      tags: [Sensors]
+      summary: List sensor metadata
+      description: >
+        Returns sensor metadata (sensorId, sensorName, unit). Data is sourced from
+        the emulator /sensors route and served from a short-lived cache.
+      responses:
+        '200':
+          description: Sensor metadata list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SensorMetadata'
+              example:
+                - sensorId: 1000000070501
+                  sensorName: BATTERY_TEMPERATURE
+                  unit: C
+                - sensorId: 3000000060101
+                  sensorName: VEHICLE_SPEED
+                  unit: km/h
+        '502':
+          description: Failed to fetch sensor metadata from emulator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                reason: Emulator sensors request failed
+  /telemetry/latest:
+    get:
+      tags: [Telemetry]
+      summary: Get latest telemetry per sensor
+      description: >
+        Returns only latest valid reading per sensor. Payloads with invalid format
+        are dropped before storage.
+      responses:
+        '200':
+          description: Latest telemetry list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TelemetryReading'
+              example:
+                - sensorId: 3000000060002
+                  value: 421.6
+                  timestamp: 1710000000.217
+                - sensorId: 3000000060101
+                  value: 96.24
+                  timestamp: 1710000000.311
+  /telemetry/stats:
+    get:
+      tags: [Telemetry]
+      summary: Get telemetry ingestion counters
+      description: >
+        Returns counters for accepted, dropped, and coerced telemetry payloads
+        seen by the API ingestion pipeline.
+      responses:
+        '200':
+          description: Ingestion counters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetryStats'
+              example:
+                accepted: 1520
+                dropped: 45
+                coerced: 113
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, emulator]
+      properties:
+        status:
+          type: string
+          enum: [ok, unhealthy]
+        emulator:
+          type: boolean
+        reason:
+          type: string
+    SensorMetadata:
+      type: object
+      required: [sensorId, sensorName, unit]
+      properties:
+        sensorId:
+          type: integer
+          format: int64
+          example: 3000000060002
+        sensorName:
+          type: string
+          example: PACK_VOLTAGE
+        unit:
+          type: string
+          example: V
+    TelemetryReading:
+      type: object
+      required: [sensorId, value, timestamp]
+      properties:
+        sensorId:
+          type: integer
+          format: int64
+          example: 3000000060101
+        value:
+          type: number
+          format: double
+          example: 88.32
+        timestamp:
+          type: number
+          format: double
+          description: Unix timestamp in seconds
+          example: 1710000000.311
+    TelemetryStats:
+      type: object
+      required: [accepted, dropped, coerced]
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+          example: 1520
+        dropped:
+          type: integer
+          minimum: 0
+          example: 45
+        coerced:
+          type: integer
+          minimum: 0
+          example: 113
+    ErrorResponse:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
 servers:
   - url: http://localhost:4000
     description: Local development server
